@@ -1,2 +1,4 @@
 .idea
 aws-util.iml
+lib
+target
