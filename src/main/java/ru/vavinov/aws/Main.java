@@ -99,7 +99,7 @@ public class Main {
         private final List<Part> parts;
         @JsonProperty
         @Nullable
-        private String expectedEtag;
+        private String multipartEtag;
 
         @JsonCreator
         public Session(
@@ -107,13 +107,13 @@ public class Main {
                 @JsonProperty("target") S3Target target,
                 @JsonProperty("uploadId") String uploadId,
                 @JsonProperty("parts") List<Part> parts,
-                @JsonProperty("expectedEtag") String expectedEtag)
+                @JsonProperty("multipartEtag") String multipartEtag)
         {
             this.file = file;
             this.target = target;
             this.uploadId = uploadId;
             this.parts = parts;
-            this.expectedEtag = expectedEtag;
+            this.multipartEtag = multipartEtag;
         }
     }
 
@@ -148,10 +148,11 @@ public class Main {
     // http://permalink.gmane.org/gmane.comp.file-systems.s3.s3tools/583
     private static String s3multipartEtag(List<String> partEtags) throws IOException, NoSuchAlgorithmException {
         byte[] concatenatedEtags = Bytes.concat(partEtags.stream()
-                .map((etag) -> BaseEncoding.base16().decode(etag))
+                .map((etag) -> BaseEncoding.base16().decode(etag.toUpperCase()))
                 .collect(Collectors.<byte[]>toList())
                 .toArray(new byte[0][]));
-        return BaseEncoding.base16().encode(Md5Utils.computeMD5Hash(concatenatedEtags)) + "-" + partEtags.size();
+        return BaseEncoding.base16().encode(Md5Utils.computeMD5Hash(concatenatedEtags)).toLowerCase()
+                + "-" + partEtags.size();
     }
 
     public static void main(String[] args) throws Exception {
@@ -222,7 +223,7 @@ public class Main {
                         }
                     })
             ).getPartETag();
-            System.out.println(" etag=" + etag.getETag());
+            System.out.println(" ETag=" + etag.getETag());
             part.etag = etag.getETag();
 
             saveSession(session, sessionStatusFile);
@@ -231,21 +232,23 @@ public class Main {
         if (!session.parts.stream().allMatch((part) -> part.etag != null)) {
             System.err.println("Some parts are still not uploaded :(");
             System.exit(1);
+        } else {
+            System.out.println("All parts are uploaded, completing multipart upload...");
         }
 
-        if (session.expectedEtag == null) {
-            session.expectedEtag = s3multipartEtag(session.parts.stream()
+        if (session.multipartEtag == null) {
+            session.multipartEtag = s3multipartEtag(session.parts.stream()
                     .map((part) -> part.etag)
                     .collect(Collectors.<String>toList()));
         }
 
-        System.out.println("Expected ETag: " + session.expectedEtag);
+        System.out.println("Multipart ETag: " + session.multipartEtag);
 
         CompleteMultipartUploadResult complete = client.completeMultipartUpload(new CompleteMultipartUploadRequest(
                 session.target.bucket, session.target.key, session.uploadId,
-                session.parts.stream()
+                Lists.newArrayList(session.parts.stream()
                         .map((part) -> new PartETag(part.range.number, part.etag))
-                        .collect(Collectors.<PartETag>toList())));
+                        .iterator())));
 
         System.out.println("Location: " + complete.getLocation());
     }
