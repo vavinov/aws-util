@@ -2,6 +2,7 @@ package ru.vavinov.aws;
 
 import java.io.File;
 import java.io.IOException;
+import java.security.NoSuchAlgorithmException;
 import java.util.List;
 import java.util.stream.Collectors;
 
@@ -16,10 +17,15 @@ import com.amazonaws.services.s3.model.PartETag;
 import com.amazonaws.services.s3.model.ProgressEvent;
 import com.amazonaws.services.s3.model.ProgressListener;
 import com.amazonaws.services.s3.model.UploadPartRequest;
+import com.amazonaws.util.Md5Utils;
 import com.google.common.collect.Lists;
+import com.google.common.io.BaseEncoding;
+import com.google.common.primitives.Bytes;
 import org.codehaus.jackson.annotate.JsonCreator;
 import org.codehaus.jackson.annotate.JsonProperty;
 import org.codehaus.jackson.map.ObjectMapper;
+
+// TODO use Optional instead of nulls
 
 public class Main {
     private static final int PART_SIZE = 5 * 1048576;
@@ -91,18 +97,23 @@ public class Main {
         private final String uploadId;
         @JsonProperty
         private final List<Part> parts;
+        @JsonProperty
+        @Nullable
+        private String expectedEtag;
 
         @JsonCreator
         public Session(
                 @JsonProperty("file") File file,
                 @JsonProperty("target") S3Target target,
                 @JsonProperty("uploadId") String uploadId,
-                @JsonProperty("parts") List<Part> parts)
+                @JsonProperty("parts") List<Part> parts,
+                @JsonProperty("expectedEtag") String expectedEtag)
         {
             this.file = file;
             this.target = target;
             this.uploadId = uploadId;
             this.parts = parts;
+            this.expectedEtag = expectedEtag;
         }
     }
 
@@ -133,6 +144,16 @@ public class Main {
         return new ObjectMapper().readValue(file, Session.class);
     }
 
+    // unofficial spec:
+    // http://permalink.gmane.org/gmane.comp.file-systems.s3.s3tools/583
+    private static String s3multipartEtag(List<String> partEtags) throws IOException, NoSuchAlgorithmException {
+        byte[] concatenatedEtags = Bytes.concat(partEtags.stream()
+                .map((etag) -> BaseEncoding.base16().decode(etag))
+                .collect(Collectors.<byte[]>toList())
+                .toArray(new byte[0][]));
+        return BaseEncoding.base16().encode(Md5Utils.computeMD5Hash(concatenatedEtags)) + "-" + partEtags.size();
+    }
+
     public static void main(String[] args) throws Exception {
         if (args.length < 2) {
             throw usageAndExit();
@@ -157,7 +178,7 @@ public class Main {
 
             session = new Session(dataFile, target, uploadId, toRanges(dataFile.length(), PART_SIZE).stream()
                     .map((partRange) -> new Part(partRange, null))
-                    .collect(Collectors.<Part>toList()));
+                    .collect(Collectors.<Part>toList()), null);
 
             saveSession(session, sessionStatusFile);
 
@@ -212,12 +233,20 @@ public class Main {
             System.exit(1);
         }
 
+        if (session.expectedEtag == null) {
+            session.expectedEtag = s3multipartEtag(session.parts.stream()
+                    .map((part) -> part.etag)
+                    .collect(Collectors.<String>toList()));
+        }
+
+        System.out.println("Expected ETag: " + session.expectedEtag);
+
         CompleteMultipartUploadResult complete = client.completeMultipartUpload(new CompleteMultipartUploadRequest(
                 session.target.bucket, session.target.key, session.uploadId,
                 session.parts.stream()
                         .map((part) -> new PartETag(part.range.number, part.etag))
                         .collect(Collectors.<PartETag>toList())));
 
-        System.out.println(complete.getLocation());
+        System.out.println("Location: " + complete.getLocation());
     }
 }
