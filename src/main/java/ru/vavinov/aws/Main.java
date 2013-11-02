@@ -1,7 +1,11 @@
 package ru.vavinov.aws;
 
 import java.io.File;
+import java.io.IOException;
 import java.util.List;
+import java.util.stream.Collectors;
+
+import javax.annotation.Nullable;
 
 import com.amazonaws.auth.SystemPropertiesCredentialsProvider;
 import com.amazonaws.services.s3.AmazonS3Client;
@@ -13,16 +17,27 @@ import com.amazonaws.services.s3.model.ProgressEvent;
 import com.amazonaws.services.s3.model.ProgressListener;
 import com.amazonaws.services.s3.model.UploadPartRequest;
 import com.google.common.collect.Lists;
+import org.codehaus.jackson.annotate.JsonCreator;
+import org.codehaus.jackson.annotate.JsonProperty;
+import org.codehaus.jackson.map.ObjectMapper;
 
 public class Main {
-    private static final int PART_SIZE = 10 * 1048576;
+    private static final int PART_SIZE = 5 * 1048576;
 
     public static class PartRange {
+        @JsonProperty
         private final int number;
+        @JsonProperty
         private final long offset;
+        @JsonProperty
         private final int length;
 
-        public PartRange(int number, long offset, int length) {
+        @JsonCreator
+        public PartRange(
+                @JsonProperty("number") int number,
+                @JsonProperty("offset") long offset,
+                @JsonProperty("length") int length)
+        {
             this.number = number;
             this.offset = offset;
             this.length = length;
@@ -31,6 +46,63 @@ public class Main {
         @Override
         public String toString() {
             return "[#" + number + " offset=" + offset + " size=" + length + "]";
+        }
+    }
+
+    public static class Part {
+        @JsonProperty
+        private final PartRange range;
+        @JsonProperty
+        @Nullable
+        private String etag;
+
+        @JsonCreator
+        public Part(
+                @JsonProperty("range") PartRange range,
+                @JsonProperty("etag") String etag)
+        {
+            this.range = range;
+            this.etag = etag;
+        }
+    }
+
+    public static class S3Target {
+        @JsonProperty
+        private final String bucket;
+        @JsonProperty
+        private final String key;
+
+        @JsonCreator
+        public S3Target(
+                @JsonProperty("bucket") String bucket,
+                @JsonProperty("key") String key)
+        {
+            this.bucket = bucket;
+            this.key = key;
+        }
+    }
+
+    public static class Session {
+        @JsonProperty
+        private final File file;
+        @JsonProperty
+        private final S3Target target;
+        @JsonProperty
+        private final String uploadId;
+        @JsonProperty
+        private final List<Part> parts;
+
+        @JsonCreator
+        public Session(
+                @JsonProperty("file") File file,
+                @JsonProperty("target") S3Target target,
+                @JsonProperty("uploadId") String uploadId,
+                @JsonProperty("parts") List<Part> parts)
+        {
+            this.file = file;
+            this.target = target;
+            this.uploadId = uploadId;
+            this.parts = parts;
         }
     }
 
@@ -45,44 +117,75 @@ public class Main {
         return result;
     }
 
-    public static void main(String[] args) {
-        if (args.length < 3) {
-            System.err.println("usage:  " + Main.class.getName() + " <bucket> <key> <file> [<uploadid>] [<start-part-n>]");
-            System.exit(1);
-        }
+    private static Exception usageAndExit() {
+        System.err.println("usage:");
+        System.err.println("\t" + Main.class.getName() + " --upload <bucket> <key> <data-file> <status-file>");
+        System.err.println("\t" + Main.class.getName() + " --resume-upload <status-file>");
+        System.exit(1);
+        throw null;
+    }
 
-        final String bucket = args[0];
-        final String key = args[1];
-        final File file = new File(args[2]);
+    private static void saveSession(Session session, File file) throws IOException {
+        new ObjectMapper().defaultPrettyPrintingWriter().writeValue(file, session);
+    }
+
+    private static Session loadSession(File file) throws IOException {
+        return new ObjectMapper().readValue(file, Session.class);
+    }
+
+    public static void main(String[] args) throws Exception {
+        if (args.length < 2) {
+            throw usageAndExit();
+        }
 
         final AmazonS3Client client = new AmazonS3Client(new SystemPropertiesCredentialsProvider());
 
-        final String uploadId = (args.length > 3) ? args[3]
-                : client.initiateMultipartUpload(new InitiateMultipartUploadRequest(bucket, key)).getUploadId();
+        String action = args[0];
 
-        final int firstPartNumber = (args.length > 4) ? Integer.parseInt(args[4]) : 1;
+        final Session session;
+        final File sessionStatusFile;
 
-        System.out.println("Got uploadId=" + uploadId);
+        if ("--upload".equals(action)) {
+            final S3Target target = new S3Target(args[1], args[2]);
+            final File dataFile = new File(args[3]);
 
-        List<PartRange> partRanges = toRanges(file.length(), PART_SIZE);
-        System.out.println("Total parts=" + partRanges.size() + ", starting from " + firstPartNumber);
+            sessionStatusFile = new File(args[4]);
 
-        List<PartETag> etags = Lists.newArrayList();
-        for (PartRange range : partRanges.subList(firstPartNumber - 1, partRanges.size())) {
-            if (range.number < firstPartNumber) {
-                continue; // XXX
-            }
+            final String uploadId = client.initiateMultipartUpload(
+                    new InitiateMultipartUploadRequest(target.bucket, target.key)).getUploadId();
+            System.out.println("Got uploadId=" + uploadId);
 
-            System.out.print("Uploading part #" + range.number);
+            session = new Session(dataFile, target, uploadId, toRanges(dataFile.length(), PART_SIZE).stream()
+                    .map((partRange) -> new Part(partRange, null))
+                    .collect(Collectors.<Part>toList()));
+
+            saveSession(session, sessionStatusFile);
+
+        } else if ("--resume-upload".equals(action)) {
+            sessionStatusFile = new File(args[1]);
+            session = loadSession(sessionStatusFile);
+
+        } else {
+            throw usageAndExit();
+        }
+
+        List<Part> partsToUpload = session.parts.stream()
+                .filter((part) -> part.etag == null).
+                collect(Collectors.<Part>toList());
+
+        System.out.println("Total parts=" + session.parts.size() + ", need to upload=" + partsToUpload.size());
+
+        for (Part part : partsToUpload) {
+            System.out.print("Uploading part #" + part.range.number);
             System.out.flush();
             PartETag etag = client.uploadPart(new UploadPartRequest()
-                    .withUploadId(uploadId)
-                    .withBucketName(bucket)
-                    .withKey(key)
-                    .withPartNumber(range.number)
-                    .withPartSize(range.length)
-                    .withFile(file)
-                    .withFileOffset(range.offset)
+                    .withUploadId(session.uploadId)
+                    .withBucketName(session.target.bucket)
+                    .withKey(session.target.key)
+                    .withPartNumber(part.range.number)
+                    .withPartSize(part.range.length)
+                    .withFile(session.file)
+                    .withFileOffset(part.range.offset)
                     .withProgressListener(new ProgressListener() {
                         private static final int PERIOD = 1048576;
                         private long transferred = 0;
@@ -99,11 +202,21 @@ public class Main {
                     })
             ).getPartETag();
             System.out.println(" etag=" + etag.getETag());
-            etags.add(etag);
+            part.etag = etag.getETag();
+
+            saveSession(session, sessionStatusFile);
         }
 
-        CompleteMultipartUploadResult complete = client.completeMultipartUpload(
-                new CompleteMultipartUploadRequest(bucket, key, uploadId, etags));
+        if (!session.parts.stream().allMatch((part) -> part.etag != null)) {
+            System.err.println("Some parts are still not uploaded :(");
+            System.exit(1);
+        }
+
+        CompleteMultipartUploadResult complete = client.completeMultipartUpload(new CompleteMultipartUploadRequest(
+                session.target.bucket, session.target.key, session.uploadId,
+                session.parts.stream()
+                        .map((part) -> new PartETag(part.range.number, part.etag))
+                        .collect(Collectors.<PartETag>toList())));
 
         System.out.println(complete.getLocation());
     }
