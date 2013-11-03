@@ -28,7 +28,11 @@ import org.codehaus.jackson.map.ObjectMapper;
 // TODO use Optional instead of nulls
 
 public class Main {
-    private static final int PART_SIZE = 5 * 1048576;
+    // http://docs.aws.amazon.com/AmazonS3/latest/dev/qfacts.html
+    private static final long MIN_PART_SIZE = 5L * 1024 * 1024;
+    private static final long MAX_PART_SIZE = 5L * 1024 * 1024 * 1024;
+    private static final long MAX_TOTAL_SIZE = 5L * 1024 * 1024 * 1024 * 1024;
+    private static final long MAX_PART_COUNT = 10000L;
 
     public static class PartRange {
         @JsonProperty
@@ -117,13 +121,23 @@ public class Main {
         }
     }
 
+    private static int toInt(long l) {
+        if (l < Integer.MIN_VALUE || l > Integer.MAX_VALUE) {
+            throw new IllegalArgumentException("long does not fit into int");
+        }
+        return (int) l;
+    }
+
     public static List<PartRange> toRanges(long n, int maxRangeLength) {
-        List<PartRange> result = Lists.newArrayList();
+        int capacity = toInt(n / maxRangeLength) + 1;
+        List<PartRange> result = Lists.newArrayListWithCapacity(capacity);
+        //System.err.println("Expected # of parts: " + capacity);
         long offset = 0;
         for (int number = 1; offset < n; ++ number) {
-            int partLength = Math.min(maxRangeLength, (int) (n - offset));
+            int partLength = toInt(Math.min((long) maxRangeLength, n - offset));
             result.add(new PartRange(number, offset, partLength));
             offset += partLength;
+            //System.err.println(": " + number + " o " + offset + " pl " + partLength + " n=" + n);
         }
         return result;
     }
@@ -155,6 +169,13 @@ public class Main {
                 + "-" + partEtags.size();
     }
 
+    private static int minimalPartSize(long totalSize) {
+        if (totalSize > MAX_TOTAL_SIZE) {
+            throw new IllegalArgumentException();
+        }
+        return toInt(Math.max(MIN_PART_SIZE, totalSize / MAX_PART_COUNT));
+    }
+
     public static void main(String[] args) throws Exception {
         if (args.length < 2) {
             throw usageAndExit();
@@ -173,11 +194,16 @@ public class Main {
 
             sessionStatusFile = new File(args[4]);
 
+            long dataFileSize = dataFile.length();
+            int partSize = minimalPartSize(dataFileSize);
+            System.out.println("Data file size=" + dataFileSize + ", will use part size=" + partSize);
+
             final String uploadId = client.initiateMultipartUpload(
                     new InitiateMultipartUploadRequest(target.bucket, target.key)).getUploadId();
             System.out.println("Got uploadId=" + uploadId);
 
-            session = new Session(dataFile, target, uploadId, toRanges(dataFile.length(), PART_SIZE).stream()
+
+            session = new Session(dataFile, target, uploadId, toRanges(dataFile.length(), partSize).stream()
                     .map((partRange) -> new Part(partRange, null))
                     .collect(Collectors.<Part>toList()), null);
 
