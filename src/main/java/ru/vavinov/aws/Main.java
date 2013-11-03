@@ -176,6 +176,15 @@ public class Main {
         return toInt(Math.max(MIN_PART_SIZE, totalSize / MAX_PART_COUNT));
     }
 
+    private static String prettyDurationSeconds(long totalSeconds) {
+        long seconds = totalSeconds % 60;
+        long minutes = totalSeconds / 60 % 60;
+        long hours = totalSeconds / 3600 % 24;
+        long days = totalSeconds / 3600 / 24;
+        return ((days > 0) ? (days + "d ") : "")
+                + String.format("%d:%02d:%02d", hours, minutes, seconds);
+    }
+
     public static void main(String[] args) throws Exception {
         if (args.length < 2) {
             throw usageAndExit();
@@ -226,6 +235,9 @@ public class Main {
         for (Part part : partsToUpload) {
             System.out.print("Uploading part #" + part.range.number);
             System.out.flush();
+
+            long whenStarted = System.currentTimeMillis();
+
             PartETag etag = client.uploadPart(new UploadPartRequest()
                     .withUploadId(session.uploadId)
                     .withBucketName(session.target.bucket)
@@ -249,8 +261,17 @@ public class Main {
                         }
                     })
             ).getPartETag();
-            System.out.println(" ETag=" + etag.getETag());
+
             part.etag = etag.getETag();
+
+            long deltaMillis = System.currentTimeMillis() - whenStarted;
+            double bytesPerSecond = 1000 * ((double) part.range.length) / deltaMillis;
+            long bytesLeft = session.parts.stream()
+                    .filter((p) -> p.etag == null)
+                    .collect(Collectors.sumBy((p) -> (long) p.range.length));
+
+            System.out.println(" ETag=" + etag.getETag() + ", at bytes-per-second=" + (int) bytesPerSecond + " ETA in "
+                    + prettyDurationSeconds((long) (bytesLeft / bytesPerSecond)));
 
             saveSession(session, sessionStatusFile);
         }
