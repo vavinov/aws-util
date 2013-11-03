@@ -4,11 +4,12 @@ AWS Utils
 A simple utility to upload files to S3 in multiple parts, with resumption.
 
 usage:
+```
     ru.vavinov.aws.Main --upload <bucket> <key> <data-file> <status-file>
     ru.vavinov.aws.Main --resume-upload <status-file>
-
+```
 example:
-%%
+```
 $ java -Daws.accessKeyId=... -Daws.secretKey=... -cp lib/\*:target/aws-util-1.0-SNAPSHOT.jar ru.vavinov.aws.Main \
     --upload BUCKETNAME scala-2.10.3.tgz ~/Downloads/scala-2.10.3.tgz scala-2.10.3.tgz.status.json
 Data file size=30531249, will use part size=5242880
@@ -27,6 +28,6 @@ Uploading part #6.... ETag=b5777d5a56613964cbe766d7d57b93e8, at bytes-per-second
 All parts are uploaded, completing multipart upload...
 Multipart ETag: 88ae753299705760a3213a8e2ba1d33b-6
 Location: https://BUCKETNAME.s3.amazonaws.com/scala-2.10.3.tgz
-%%
+```
 
 Requires JDK 1.8.
