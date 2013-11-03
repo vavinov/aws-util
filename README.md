@@ -18,7 +18,7 @@ Total parts=6, need to upload=6
 Uploading part #1.... ETag=15d3a75ba575028c8a62648abba83d90, at bytes-per-second=250651 ETA in 0:01:40
 Uploading part #2.... ETag=90796954ff68d2728a79c8fae55abff6, at bytes-per-second=214161 ETA in 0:01:33
 Uploading part #3..
-
+^C
 $ java -Daws.accessKeyId=... -Daws.secretKey=... ru.vavinov.aws.Main --resume-upload scala-2.10.3.tgz.status.json
 Total parts=6, need to upload=4
 Uploading part #3.... ETag=2d135fa7709b22cb1bf5d7aac1396550, at bytes-per-second=214828 ETA in 0:01:08
