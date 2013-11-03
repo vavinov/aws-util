@@ -1,7 +1,7 @@
 AWS Utils
 =========
 
-A simple utility to upload files to S3 in multiple parts, with resumption.
+A simple utility to upload files to Amazon S3 in multiple parts, with resumption.
 
 usage:
 ```
