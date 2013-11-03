@@ -203,6 +203,11 @@ public class Main {
 
             sessionStatusFile = new File(args[4]);
 
+            if (sessionStatusFile.exists()) {
+                System.err.println("Aborting: session status file " + sessionStatusFile + " already exists.");
+                throw usageAndExit();
+            }
+
             long dataFileSize = dataFile.length();
             int partSize = minimalPartSize(dataFileSize);
             System.out.println("Data file size=" + dataFileSize + ", will use part size=" + partSize);
